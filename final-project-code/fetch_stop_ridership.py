@@ -81,8 +81,28 @@ def fetch_mbta_green_line() -> Optional[pd.DataFrame]:
         average_boardings_by_day = average_boardings_by_day[
             ["station", "avg_boardings_per_day"]
         ]
+        with open(str(OUT_DIR) + "/mbta_gtfs_stops.csv", "r") as f:
+            stop_locations = pd.read_csv(f)
+        stop_locations[["station", "stop_lat", "stop_lon"]]
+        stop_locations = stop_locations.rename(
+            columns={"stop_lat": "latitude", "stop_lon": "longitude"}
+        )
+        average_boardings_by_day = average_boardings_by_day.merge(
+            stop_locations[["station", "latitude", "longitude"]],
+            on="station",
+            how="left",
+        )
+
+        average_boardings_by_day = (
+            average_boardings_by_day.groupby("station")
+            .agg(
+                avg_boardings_per_day=("avg_boardings_per_day", "first"),
+                latitude=("latitude", "first"),
+                longitude=("longitude", "first"),
+            )
+            .reset_index()
+        )
         average_boardings_by_day["agency"] = "MBTA"
-        average_boardings_by_day["dataset"] = "fall_2024_avg_by_day"
         dfs.append(average_boardings_by_day)
     if not dfs:
         return None
@@ -118,6 +138,18 @@ def fetch_uta_light_rail() -> Optional[pd.DataFrame]:
                 )
             )
             average_boardings_by_day["agency"] = "UTA"
+
+            with open(str(OUT_DIR) + "/uta_gtfs_stops.csv", "r") as f:
+                stop_locations = pd.read_csv(f)
+            stop_locations[["station", "stop_lat", "stop_lon"]]
+            stop_locations = stop_locations.rename(
+                columns={"stop_lat": "latitude", "stop_lon": "longitude"}
+            )
+            average_boardings_by_day = average_boardings_by_day.merge(
+                stop_locations[["station", "latitude", "longitude"]],
+                on="station",
+                how="left",
+            )
             dfs.append(average_boardings_by_day)
     return pd.concat(dfs, ignore_index=True) if dfs else None
 
@@ -190,8 +222,28 @@ def fetch_chicago_ridership_data() -> Optional[pd.DataFrame]:
     df = df.dropna(subset=["avg_boardings_per_day"])
     df = df.rename(columns={"stationname": "station"})
     df = df[["station", "avg_boardings_per_day"]]
+    with open(str(OUT_DIR) + "/cta_gtfs_stops.csv", "r") as f:
+        stop_locations = pd.read_csv(f)
+    stop_locations[["station", "stop_lat", "stop_lon"]]
+    stop_locations = stop_locations.rename(
+        columns={"stop_lat": "latitude", "stop_lon": "longitude"}
+    )
+    df = df.merge(
+        stop_locations[["station", "latitude", "longitude"]],
+        on="station",
+        how="left",
+    )
+    df = (
+        df.groupby("station")
+        .agg(
+            avg_boardings_per_day=("avg_boardings_per_day", "first"),
+            latitude=("latitude", "first"),
+            longitude=("longitude", "first"),
+        )
+        .reset_index()
+    )
+
     df["agency"] = "Chicago CTA"
-    df["dataset"] = "daily_ridership_2024"
     return df
 
 
