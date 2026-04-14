@@ -1,11 +1,174 @@
+from dataclasses import dataclass
 import time
 import requests
 import pandas as pd
 from pathlib import Path
 from typing import Optional
+import censusgeocode as cg
 
 OUT_DIR = Path(__file__).parent / "light_rail_data"
 OUT_FILE = OUT_DIR / "stop_ridership.csv"
+
+
+@dataclass
+class CensusData:
+    population: int
+    median_income: int
+    percent_under_5: Optional[float] = None
+    pct_over_85: Optional[float] = None
+    median_household_income: Optional[int] = None
+    per_capita_income: Optional[int] = None
+    gini_index: Optional[float] = None
+    median_home_value: Optional[int] = None
+    percent_below_poverty: Optional[float] = None
+    median_rent: Optional[int] = None
+    pct_bachelors_or_higher: Optional[float] = None
+    pct_labor_force_unemployed: Optional[float] = None
+    pct_married: Optional[float] = None
+    pct_with_health_insurance: Optional[float] = None
+    pct_foreign_born: Optional[float] = None
+    pct_renter_occupied: Optional[float] = None
+    pct_with_computer: Optional[float] = None
+    pct_with_internet: Optional[float] = None
+    pct_no_vehicle_available: Optional[float] = None
+
+
+def get_census_data_from_coordinates(
+    latitude: float, longitude: float
+) -> Optional[CensusData]:
+    try:
+        result = cg.coordinates(x=longitude, y=latitude)
+        if not result or "Census Tracts" not in result or not result["Census Tracts"]:
+            return None
+        tract_info = result["Census Tracts"][0]
+        url = "https://api.census.gov/data/2022/acs/acs5"
+        params = {
+            "get": ",".join(
+                [
+                    "B01003_001E",  # total population
+                    "B01001_001E",  # sex-by-age
+                    "B01001_003E",  # male under 5
+                    "B01001_027E",  # female under 5
+                    "B01001_025E",  # male 85+
+                    "B01001_049E",  # female 85+
+                    "B19013_001E",  # median household income
+                    "B19301_001E",  # per capita income
+                    "B19083_001E",  # gini index
+                    "B25077_001E",  # median home value
+                    "B25064_001E",  # median gross rent
+                    "B25003_001E",  # occupied housing units
+                    "B25003_003E",  # renter occupied
+                    "B17001_001E",  # poverty
+                    "B17001_002E",  # below poverty level
+                    "B15003_001E",  # educational attainment
+                    "B15003_022E",  # bachelor's degree
+                    "B15003_023E",  # master's degree
+                    "B15003_024E",  # professional school degree
+                    "B15003_025E",  # doctorate degree
+                    "B23025_002E",  # in civilian labor force
+                    "B23025_005E",  # civilian unemployed
+                    "B12001_001E",  # marital status
+                    "B12001_004E",  # male, now married
+                    "B12001_013E",  # female, now married
+                    "B27010_001E",  # health insurance
+                    "B27010_017E",  # under 19, uninsured
+                    "B27010_033E",  # 19–34, uninsured
+                    "B27010_050E",  # 35–64, uninsured
+                    "B27010_066E",  # 65+, uninsured
+                    "B05002_001E",  # nativity
+                    "B05002_013E",  # foreign born
+                    "B28001_001E",  # computer
+                    "B28001_002E",  # has a computer
+                    "B28002_001E",  # internet
+                    "B28002_013E",  # no internet access
+                    "B08201_001E",  # vehicle availability
+                    "B08201_002E",  # no vehicle available
+                ]
+            ),
+            "for": f"tract:{tract_info['TRACT']}",
+            "in": f"state:{tract_info['STATE']} county:{tract_info['COUNTY']}",
+            "key": "",
+        }
+        response = requests.get(url, params=params)
+        print(response.json())
+        data = response.json()
+        if len(data) < 2:
+            print(f"No census data found for coordinates ({latitude}, {longitude})")
+            return None
+        d = data[1]  # shorthand
+
+        def _denom(val):
+            v = int(val)
+            return None if v <= 0 else v
+
+        pop = _denom(d[0])
+        housing = _denom(d[11])
+        poverty = _denom(d[13])
+        education = _denom(d[15])
+        labor = _denom(d[20])
+        marital = _denom(d[22])
+        health = _denom(d[25])
+        nativity = _denom(d[30])
+        computer = _denom(d[32])
+        internet = _denom(d[34])
+        vehicle = _denom(d[36])
+
+        ret = CensusData(
+            population=int(d[0]),
+            median_income=int(d[6]),
+            percent_under_5=(int(d[2]) + int(d[3])) / pop * 100
+            if pop is not None
+            else None,
+            pct_over_85=(int(d[4]) + int(d[5])) / pop * 100
+            if pop is not None
+            else None,
+            median_household_income=int(d[6]),
+            per_capita_income=int(d[7]),
+            gini_index=float(d[8]),
+            median_home_value=int(d[9]),
+            median_rent=int(d[10]),
+            pct_renter_occupied=int(d[12]) / housing * 100
+            if housing is not None
+            else None,
+            percent_below_poverty=int(d[14]) / poverty * 100
+            if poverty is not None
+            else None,
+            pct_bachelors_or_higher=(
+                (int(d[16]) + int(d[17]) + int(d[18]) + int(d[19])) / education * 100
+                if education is not None
+                else None
+            ),
+            pct_labor_force_unemployed=int(d[21]) / labor * 100
+            if labor is not None
+            else None,
+            pct_married=(int(d[23]) + int(d[24])) / marital * 100
+            if marital is not None
+            else None,
+            pct_with_health_insurance=(
+                (1 - (int(d[26]) + int(d[27]) + int(d[28]) + int(d[29])) / health) * 100
+                if health is not None
+                else None
+            ),
+            pct_foreign_born=int(d[31]) / nativity * 100
+            if nativity is not None
+            else None,
+            pct_with_computer=int(d[33]) / computer * 100
+            if computer is not None
+            else None,
+            pct_with_internet=(1 - int(d[35]) / internet) * 100
+            if internet is not None
+            else None,
+            pct_no_vehicle_available=int(d[37]) / vehicle * 100
+            if vehicle is not None
+            else None,
+        )
+        print(f"Census data for coordinates ({latitude}, {longitude}): {ret}")
+        return ret
+    except Exception as e:
+        print(
+            f"Error fetching census data for coordinates ({latitude}, {longitude}): {e}"
+        )
+        return None
 
 
 def arcgis_query_all(
@@ -233,6 +396,7 @@ def fetch_chicago_ridership_data() -> Optional[pd.DataFrame]:
         on="station",
         how="left",
     )
+    # TODO: this is slightly wrong b/c the stations in the gtfs file don't always match the api station names :/
     df = (
         df.groupby("station")
         .agg(
@@ -242,6 +406,7 @@ def fetch_chicago_ridership_data() -> Optional[pd.DataFrame]:
         )
         .reset_index()
     )
+    df = df.dropna(subset=["latitude", "longitude"])
 
     df["agency"] = "Chicago CTA"
     return df
@@ -295,6 +460,69 @@ def main():
         all_dfs.append(chicago)
     else:
         print("Failed to fetch Chicago CTA data")
+
+    for df in all_dfs:
+        df["census_data"] = df.apply(
+            lambda row: get_census_data_from_coordinates(
+                row["latitude"], row["longitude"]
+            ),
+            axis=1,
+        )
+        df["population"] = df["census_data"].apply(
+            lambda x: x.population if x else None
+        )
+        df["median_income"] = df["census_data"].apply(
+            lambda x: x.median_income if x else None
+        )
+        df["percent_under_5"] = df["census_data"].apply(
+            lambda x: x.percent_under_5 if x else None
+        )
+        df["pct_over_85"] = df["census_data"].apply(
+            lambda x: x.pct_over_85 if x else None
+        )
+        df["median_household_income"] = df["census_data"].apply(
+            lambda x: x.median_household_income if x else None
+        )
+        df["per_capita_income"] = df["census_data"].apply(
+            lambda x: x.per_capita_income if x else None
+        )
+        df["gini_index"] = df["census_data"].apply(
+            lambda x: x.gini_index if x else None
+        )
+        df["median_home_value"] = df["census_data"].apply(
+            lambda x: x.median_home_value if x else None
+        )
+        df["median_rent"] = df["census_data"].apply(
+            lambda x: x.median_rent if x else None
+        )
+        df["pct_bachelors_or_higher"] = df["census_data"].apply(
+            lambda x: x.pct_bachelors_or_higher if x else None
+        )
+        df["pct_labor_force_unemployed"] = df["census_data"].apply(
+            lambda x: x.pct_labor_force_unemployed if x else None
+        )
+        df["pct_married"] = df["census_data"].apply(
+            lambda x: x.pct_married if x else None
+        )
+        df["pct_with_health_insurance"] = df["census_data"].apply(
+            lambda x: x.pct_with_health_insurance if x else None
+        )
+        df["pct_foreign_born"] = df["census_data"].apply(
+            lambda x: x.pct_foreign_born if x else None
+        )
+        df["pct_renter_occupied"] = df["census_data"].apply(
+            lambda x: x.pct_renter_occupied if x else None
+        )
+        df["pct_with_computer"] = df["census_data"].apply(
+            lambda x: x.pct_with_computer if x else None
+        )
+        df["pct_with_internet"] = df["census_data"].apply(
+            lambda x: x.pct_with_internet if x else None
+        )
+        df["pct_no_vehicle_available"] = df["census_data"].apply(
+            lambda x: x.pct_no_vehicle_available if x else None
+        )
+        df.drop(columns=["census_data"], inplace=True)
 
     combined = pd.concat(all_dfs, ignore_index=True)
     combined.to_csv(OUT_FILE, index=False)
