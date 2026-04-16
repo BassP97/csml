@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import time
 import requests
@@ -31,144 +32,155 @@ class CensusData:
     pct_with_computer: Optional[float] = None
     pct_with_internet: Optional[float] = None
     pct_no_vehicle_available: Optional[float] = None
+    pct_commute_by_transit: Optional[float] = None
+    pct_work_from_home: Optional[float] = None
+    pct_multi_unit_housing: Optional[float] = None
 
 
 def get_census_data_from_coordinates(
     latitude: float, longitude: float
 ) -> Optional[CensusData]:
-    try:
-        result = cg.coordinates(x=longitude, y=latitude)
-        if not result or "Census Tracts" not in result or not result["Census Tracts"]:
-            return None
-        tract_info = result["Census Tracts"][0]
-        url = "https://api.census.gov/data/2022/acs/acs5"
-        params = {
-            "get": ",".join(
-                [
-                    "B01003_001E",  # total population
-                    "B01001_001E",  # sex-by-age
-                    "B01001_003E",  # male under 5
-                    "B01001_027E",  # female under 5
-                    "B01001_025E",  # male 85+
-                    "B01001_049E",  # female 85+
-                    "B19013_001E",  # median household income
-                    "B19301_001E",  # per capita income
-                    "B19083_001E",  # gini index
-                    "B25077_001E",  # median home value
-                    "B25064_001E",  # median gross rent
-                    "B25003_001E",  # occupied housing units
-                    "B25003_003E",  # renter occupied
-                    "B17001_001E",  # poverty
-                    "B17001_002E",  # below poverty level
-                    "B15003_001E",  # educational attainment
-                    "B15003_022E",  # bachelor's degree
-                    "B15003_023E",  # master's degree
-                    "B15003_024E",  # professional school degree
-                    "B15003_025E",  # doctorate degree
-                    "B23025_002E",  # in civilian labor force
-                    "B23025_005E",  # civilian unemployed
-                    "B12001_001E",  # marital status
-                    "B12001_004E",  # male, now married
-                    "B12001_013E",  # female, now married
-                    "B27010_001E",  # health insurance
-                    "B27010_017E",  # under 19, uninsured
-                    "B27010_033E",  # 19–34, uninsured
-                    "B27010_050E",  # 35–64, uninsured
-                    "B27010_066E",  # 65+, uninsured
-                    "B05002_001E",  # nativity
-                    "B05002_013E",  # foreign born
-                    "B28001_001E",  # computer
-                    "B28001_002E",  # has a computer
-                    "B28002_001E",  # internet
-                    "B28002_013E",  # no internet access
-                    "B08201_001E",  # vehicle availability
-                    "B08201_002E",  # no vehicle available
-                ]
-            ),
-            "for": f"tract:{tract_info['TRACT']}",
-            "in": f"state:{tract_info['STATE']} county:{tract_info['COUNTY']}",
-            "key": "",
-        }
-        response = requests.get(url, params=params)
-        print(response.json())
-        data = response.json()
-        if len(data) < 2:
-            print(f"No census data found for coordinates ({latitude}, {longitude})")
-            return None
-        d = data[1]  # shorthand
-
-        def _denom(val):
-            v = int(val)
-            return None if v <= 0 else v
-
-        pop = _denom(d[0])
-        housing = _denom(d[11])
-        poverty = _denom(d[13])
-        education = _denom(d[15])
-        labor = _denom(d[20])
-        marital = _denom(d[22])
-        health = _denom(d[25])
-        nativity = _denom(d[30])
-        computer = _denom(d[32])
-        internet = _denom(d[34])
-        vehicle = _denom(d[36])
-
-        ret = CensusData(
-            population=int(d[0]),
-            median_income=int(d[6]),
-            percent_under_5=(int(d[2]) + int(d[3])) / pop * 100
-            if pop is not None
-            else None,
-            pct_over_85=(int(d[4]) + int(d[5])) / pop * 100
-            if pop is not None
-            else None,
-            median_household_income=int(d[6]),
-            per_capita_income=int(d[7]),
-            gini_index=float(d[8]),
-            median_home_value=int(d[9]),
-            median_rent=int(d[10]),
-            pct_renter_occupied=int(d[12]) / housing * 100
-            if housing is not None
-            else None,
-            percent_below_poverty=int(d[14]) / poverty * 100
-            if poverty is not None
-            else None,
-            pct_bachelors_or_higher=(
-                (int(d[16]) + int(d[17]) + int(d[18]) + int(d[19])) / education * 100
-                if education is not None
-                else None
-            ),
-            pct_labor_force_unemployed=int(d[21]) / labor * 100
-            if labor is not None
-            else None,
-            pct_married=(int(d[23]) + int(d[24])) / marital * 100
-            if marital is not None
-            else None,
-            pct_with_health_insurance=(
-                (1 - (int(d[26]) + int(d[27]) + int(d[28]) + int(d[29])) / health) * 100
-                if health is not None
-                else None
-            ),
-            pct_foreign_born=int(d[31]) / nativity * 100
-            if nativity is not None
-            else None,
-            pct_with_computer=int(d[33]) / computer * 100
-            if computer is not None
-            else None,
-            pct_with_internet=(1 - int(d[35]) / internet) * 100
-            if internet is not None
-            else None,
-            pct_no_vehicle_available=int(d[37]) / vehicle * 100
-            if vehicle is not None
-            else None,
-        )
-        print(f"Census data for coordinates ({latitude}, {longitude}): {ret}")
-        return ret
-    except Exception as e:
-        print(
-            f"Error fetching census data for coordinates ({latitude}, {longitude}): {e}"
-        )
+    print("Fetching census data for coordinates:", latitude, longitude)
+    result = cg.coordinates(x=longitude, y=latitude)
+    if not result or "Census Tracts" not in result or not result["Census Tracts"]:
         return None
+    tract_info = result["Census Tracts"][0]
+    url = "https://api.census.gov/data/2022/acs/acs5"
+    params = {
+        "get": ",".join(
+            [
+                "B01003_001E",  # total population
+                "B01001_001E",  # sex-by-age
+                "B01001_003E",  # male under 5
+                "B01001_027E",  # female under 5
+                "B01001_025E",  # male 85+
+                "B01001_049E",  # female 85+
+                "B19013_001E",  # median household income
+                "B19301_001E",  # per capita income
+                "B19083_001E",  # gini index
+                "B25077_001E",  # median home value
+                "B25064_001E",  # median gross rent
+                "B25003_001E",  # occupied housing units
+                "B25003_003E",  # renter occupied
+                "B17001_001E",  # poverty
+                "B17001_002E",  # below poverty level
+                "B15003_001E",  # educational attainment
+                "B15003_022E",  # bachelor's degree
+                "B15003_023E",  # master's degree
+                "B15003_024E",  # professional school degree
+                "B15003_025E",  # doctorate degree
+                "B23025_002E",  # in civilian labor force
+                "B23025_005E",  # civilian unemployed
+                "B12001_001E",  # marital status
+                "B12001_004E",  # male, now married
+                "B12001_013E",  # female, now married
+                "B27010_001E",  # health insurance
+                "B27010_017E",  # under 19, uninsured
+                "B27010_033E",  # 19–34, uninsured
+                "B27010_050E",  # 35–64, uninsured
+                "B27010_066E",  # 65+, uninsured
+                "B05002_001E",  # nativity
+                "B05002_013E",  # foreign born
+                "B28001_001E",  # computer
+                "B28001_002E",  # has a computer
+                "B28002_001E",  # internet
+                "B28002_013E",  # no internet access
+                "B08201_001E",  # vehicle availability
+                "B08201_002E",  # no vehicle available
+                "B08301_001E",  # transportation total
+                "B08301_010E",  # transportation public transit
+                "B08301_021E",  # transportation worked from home
+                "B25024_001E",  # units in structure total )density)
+                "B25024_004E",  # units in structure: 2
+                "B25024_005E",  # units in structure: 3, 4
+                "B25024_006E",  # units in structure: 5 - 9
+                "B25024_007E",  # units in structure: 10 - 19
+                "B25024_008E",  # units in structure: 20 - 49
+                "B25024_009E",  # units in structure: 50 +
+            ]
+        ),
+        "for": f"tract:{tract_info['TRACT']}",
+        "in": f"state:{tract_info['STATE']} county:{tract_info['COUNTY']}",
+        "key": "a4283f069026c52c0b81529250807a43cf87f80d",
+    }
+    response = requests.get(url, params=params)
+    print(response.json())
+    data = response.json()
+    if len(data) < 2:
+        print(f"No census data found for coordinates ({latitude}, {longitude})")
+        return None
+    d = data[1]  # shorthand
+
+    def _denom(val):
+        v = int(val)
+        return None if v <= 0 else v
+
+    pop = _denom(d[0])
+    housing = _denom(d[11])
+    poverty = _denom(d[13])
+    education = _denom(d[15])
+    labor = _denom(d[20])
+    marital = _denom(d[22])
+    health = _denom(d[25])
+    nativity = _denom(d[30])
+    computer = _denom(d[32])
+    internet = _denom(d[34])
+    vehicle = _denom(d[36])
+    commute = _denom(d[38])
+    multi_unit_total = _denom(d[41])
+
+    ret = CensusData(
+        population=int(d[0]),
+        median_income=int(d[6]),
+        percent_under_5=(int(d[2]) + int(d[3])) / pop * 100
+        if pop is not None
+        else None,
+        pct_over_85=(int(d[4]) + int(d[5])) / pop * 100 if pop is not None else None,
+        median_household_income=int(d[6]),
+        per_capita_income=int(d[7]) if d[7] else None,
+        gini_index=float(d[8]) if d[8] else None,
+        median_home_value=int(d[9]) if d[9] else None,
+        median_rent=int(d[10]) if d[10] else None,
+        pct_renter_occupied=int(d[12]) / housing * 100 if housing is not None else None,
+        percent_below_poverty=int(d[14]) / poverty * 100
+        if poverty is not None
+        else None,
+        pct_bachelors_or_higher=(
+            (int(d[16]) + int(d[17]) + int(d[18]) + int(d[19])) / education * 100
+            if education is not None
+            else None
+        ),
+        pct_labor_force_unemployed=int(d[21]) / labor * 100
+        if labor is not None
+        else None,
+        pct_married=(int(d[23]) + int(d[24])) / marital * 100
+        if marital is not None
+        else None,
+        pct_with_health_insurance=(
+            (1 - (int(d[26]) + int(d[27]) + int(d[28]) + int(d[29])) / health) * 100
+            if health is not None
+            else None
+        ),
+        pct_foreign_born=int(d[31]) / nativity * 100 if nativity is not None else None,
+        pct_with_computer=int(d[33]) / computer * 100 if computer is not None else None,
+        pct_with_internet=(1 - int(d[35]) / internet) * 100
+        if internet is not None
+        else None,
+        pct_no_vehicle_available=int(d[37]) / vehicle * 100
+        if vehicle is not None
+        else None,
+        pct_commute_by_transit=int(d[39]) / commute * 100
+        if commute is not None
+        else None,
+        pct_work_from_home=int(d[40]) / commute * 100 if commute is not None else None,
+        pct_multi_unit_housing=(
+            sum(int(d[i]) for i in range(42, 48)) / multi_unit_total * 100
+            if multi_unit_total is not None
+            else None
+        ),
+    )
+    print(f"Census data for coordinates ({latitude}, {longitude}): {ret}")
+    return ret
 
 
 def arcgis_query_all(
@@ -412,6 +424,51 @@ def fetch_chicago_ridership_data() -> Optional[pd.DataFrame]:
     return df
 
 
+def fetch_wmata() -> Optional[pd.DataFrame]:
+    df = arcgis_query_all(
+        "https://gis.mwcog.org/wa/rest/services/RTDC/MetroRailData/MapServer/0"
+    )
+
+    month_cols = [
+        "Jul_2018",
+        "Aug_2018",
+        "Sep_2018",
+        "Oct_2018",
+        "Nov_2018",
+        "Dec_2018",
+        "Jan_2019",
+        "Feb_2019",
+        "Mar_2019",
+        "Apr_2019",
+        "May_2019",
+        "Jun_2019",
+    ]
+
+    for col in month_cols:
+        df[col] = pd.to_numeric(df["MetrorailRidershipFY19." + col], errors="coerce")
+
+    df["avg_boardings_per_day"] = df[month_cols].mean(axis=1)
+
+    df = df.rename(columns={"Metro_Stations.Station_Name": "station"})
+    df["agency"] = "WMATA"
+
+    res = (
+        df[["station", "avg_boardings_per_day", "latitude", "longitude", "agency"]]
+        .dropna(subset=["latitude", "longitude", "avg_boardings_per_day"])
+        .reset_index(drop=True)
+    )
+    print(res)
+    return res
+
+
+def fetch_seattle_data() -> Optional[pd.DataFrame]:
+    with open(str(OUT_DIR) + "/link_ridership.csv", "r") as f:
+        df = pd.read_csv(f)
+    df["agency"] = "Seattle Link"
+    df["dataset"] = "daily_ridership"
+    return df
+
+
 def fetch_portland_data() -> Optional[pd.DataFrame]:
     r = requests.get(
         "http://new.portal.its.pdx.edu:8080/transit/downloadquarterlydata?agency=trimet&quarter=2019-q3-summer"
@@ -432,6 +489,19 @@ def main():
     OUT_DIR.mkdir(exist_ok=True)
 
     all_dfs = []
+    seattle = fetch_seattle_data()
+    if seattle is not None:
+        print("Fetched Seattle Link data")
+        all_dfs.append(seattle)
+    else:
+        print("Failed to fetch Seattle Link data")
+
+    wmata = fetch_wmata()
+    if wmata is not None:
+        print(f"Fetched WMATA data ({len(wmata)} stations)")
+        all_dfs.append(wmata)
+    else:
+        print("Failed to fetch WMATA data")
 
     mbta = fetch_mbta_green_line()
     if mbta is not None:
@@ -462,12 +532,14 @@ def main():
         print("Failed to fetch Chicago CTA data")
 
     for df in all_dfs:
-        df["census_data"] = df.apply(
-            lambda row: get_census_data_from_coordinates(
-                row["latitude"], row["longitude"]
-            ),
-            axis=1,
-        )
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            results = list(
+                executor.map(
+                    lambda row: get_census_data_from_coordinates(row[0], row[1]),
+                    zip(df["latitude"], df["longitude"]),
+                )
+            )
+        df["census_data"] = results
         df["population"] = df["census_data"].apply(
             lambda x: x.population if x else None
         )
@@ -521,6 +593,15 @@ def main():
         )
         df["pct_no_vehicle_available"] = df["census_data"].apply(
             lambda x: x.pct_no_vehicle_available if x else None
+        )
+        df["pct_commute_by_transit"] = df["census_data"].apply(
+            lambda x: x.pct_commute_by_transit if x else None
+        )
+        df["pct_work_from_home"] = df["census_data"].apply(
+            lambda x: x.pct_work_from_home if x else None
+        )
+        df["pct_multi_unit_housing"] = df["census_data"].apply(
+            lambda x: x.pct_multi_unit_housing if x else None
         )
         df.drop(columns=["census_data"], inplace=True)
 
