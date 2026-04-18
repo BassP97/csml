@@ -12,7 +12,7 @@ with open("light_rail_data/stop_ridership.csv", "r", encoding="utf-8") as f:
 
 df = df.replace(-666666666, np.nan)
 median = df.groupby("agency")["avg_boardings_per_day"].transform("median")
-df["above_median"] = (df["avg_boardings_per_day"] > median).astype(np.float32)
+df["above_median"] = df["avg_boardings_per_day"] > median
 
 
 big_features = [
@@ -53,13 +53,14 @@ df = pd.concat([df, agency_dummies], axis=1)
 columns = big_features + percentages + list(agency_dummies.columns)
 
 X = df[columns].values
+# todo: why are there so many nans
 X = np.where(np.isnan(X), np.nanmedian(X, axis=0), X)
 y = df["above_median"].values
 
 agencies = df["agency"].values
 idx = np.arange(len(df))
 
-train_idx, val_idx, test_idx = [], [], []
+train_arr, val_arr, test_arr = [], [], []
 for agency in np.unique(agencies):
     agency_mask = agencies == agency
     agency_idx = idx[agency_mask]
@@ -69,20 +70,20 @@ for agency in np.unique(agencies):
     n_train = int(0.75 * n)
     n_val = int(0.125 * n)
 
-    train_idx.extend(agency_idx[:n_train])
-    val_idx.extend(agency_idx[n_train : n_train + n_val])
-    test_idx.extend(agency_idx[n_train + n_val :])
+    train_arr.extend(agency_idx[:n_train])
+    val_arr.extend(agency_idx[n_train : n_train + n_val])
+    test_arr.extend(agency_idx[n_train + n_val :])
 
-train = np.array(train_idx)
-val = np.array(val_idx)
-test = np.array(test_idx)
+train = np.array(train_arr)
+val = np.array(val_arr)
+test = np.array(test_arr)
 
 
 class loader:
     def __init__(self, idx):
         self.dataset = TensorDataset(
-            torch.tensor(X[idx], dtype=torch.float32),
-            torch.tensor(y[idx], dtype=torch.float32).unsqueeze(-1),
+            torch.tensor(X[idx], dtype=torch.float),
+            torch.tensor(y[idx], dtype=torch.float).unsqueeze(-1),
         )
 
     def __iter__(self):
@@ -101,11 +102,11 @@ class RidershipClassifier(nn.Module):
             nn.Linear(n_features, 32),
             nn.BatchNorm1d(32),
             nn.ReLU(),
-            # nn.Dropout(0.1),
+            nn.Dropout(0.1),
             nn.Linear(32, 16),
             nn.BatchNorm1d(16),
             nn.ReLU(),
-            # nn.Dropout(0.1),
+            nn.Dropout(0.1),
             nn.Linear(16, 1),
         )
 
@@ -122,7 +123,7 @@ best_val_loss = float("inf")
 best_state = None
 patience_counter = 0
 
-for epoch in range(1, 300):
+for epoch in range(1, 30000):
     model.train()
     total_loss = 0.0
     for Xb, yb in train_loader:
@@ -131,14 +132,14 @@ for epoch in range(1, 300):
         loss_value.backward()
         optimizer.step()
         total_loss += loss_value.item() * len(Xb)
-    train_loss = total_loss / len(train_idx)
+    train_loss = total_loss / len(train_arr)
 
     model.eval()
     total_val = 0.0
     with torch.no_grad():
         for Xb, yb in val_loader:
             total_val += loss(model(Xb), yb).item() * len(Xb)
-    val_loss = total_val / len(val_idx)
+    val_loss = total_val / len(val_arr)
 
     scheduler.step(val_loss)
     print(
@@ -172,9 +173,10 @@ def evaluate(loader, idx, split_name):
             targets.append(yb.squeeze(-1))
     logits = torch.cat(logits).numpy()
     targets = torch.cat(targets).numpy()
-
+    # todo: any way to use bce w/ logits or something here directly rather than slapping sigmoid at the end?
     probs = torch.sigmoid(torch.tensor(logits)).numpy()
-    preds = (probs >= 0.5).astype(float)
+    # TODO: assess accuracy w/ delta between pred/actual?
+    preds = (probs > 0.5).astype(float)
 
     acc = accuracy_score(targets, preds)
     f1 = f1_score(targets, preds, zero_division=0)
@@ -186,12 +188,12 @@ def evaluate(loader, idx, split_name):
     return preds, probs, targets
 
 
-evaluate(train_loader, train_idx, "Train")
-evaluate(val_loader, val_idx, "Validation")
-test_preds, test_probs, test_targets = evaluate(test_loader, test_idx, "Test")
+evaluate(train_loader, train_arr, "Train")
+evaluate(val_loader, val_arr, "Validation")
+test_preds, test_probs, test_targets = evaluate(test_loader, test_arr, "Test")
 print("accuracy by agency:")
 for agency in np.unique(agencies):
-    agency_mask = agencies[test_idx] == agency
+    agency_mask = agencies[test_arr] == agency
     if np.sum(agency_mask) > 0:
         acc = accuracy_score(test_targets[agency_mask], test_preds[agency_mask])
         print(f"  {agency}: {acc:.4f}")

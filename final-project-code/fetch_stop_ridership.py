@@ -11,6 +11,11 @@ OUT_DIR = Path(__file__).parent / "light_rail_data"
 OUT_FILE = OUT_DIR / "stop_ridership.csv"
 
 
+def denominator(val):
+    v = int(val)
+    return None if v <= 0 else v
+
+
 @dataclass
 class CensusData:
     population: int
@@ -109,25 +114,21 @@ def get_census_data_from_coordinates(
     if len(data) < 2:
         print(f"No census data found for coordinates ({latitude}, {longitude})")
         return None
-    d = data[1]  # shorthand
+    d = data[1]
 
-    def _denom(val):
-        v = int(val)
-        return None if v <= 0 else v
-
-    pop = _denom(d[0])
-    housing = _denom(d[11])
-    poverty = _denom(d[13])
-    education = _denom(d[15])
-    labor = _denom(d[20])
-    marital = _denom(d[22])
-    health = _denom(d[25])
-    nativity = _denom(d[30])
-    computer = _denom(d[32])
-    internet = _denom(d[34])
-    vehicle = _denom(d[36])
-    commute = _denom(d[38])
-    multi_unit_total = _denom(d[41])
+    pop = denominator(d[0])
+    housing = denominator(d[11])
+    poverty = denominator(d[13])
+    education = denominator(d[15])
+    labor = denominator(d[20])
+    marital = denominator(d[22])
+    health = denominator(d[25])
+    nativity = denominator(d[30])
+    computer = denominator(d[32])
+    internet = denominator(d[34])
+    vehicle = denominator(d[36])
+    commute = denominator(d[38])
+    multi_unit_total = denominator(d[41])
 
     ret = CensusData(
         population=int(d[0]),
@@ -183,17 +184,12 @@ def get_census_data_from_coordinates(
     return ret
 
 
-def arcgis_query_all(
-    base_url: str, where: str = "1=1", out_fields: str = "*"
-) -> Optional[pd.DataFrame]:
+def query_arcgis_data(base_url: str, where: str = "1=1") -> Optional[pd.DataFrame]:
     r = requests.get(
         base_url + "/query",
         params={"where": where, "returnCountOnly": "true", "f": "json"},
     )
     total = r.json().get("count", 0)
-    if total == 0:
-        return None
-
     records = []
     page_size = 1000
     offset = 0
@@ -202,7 +198,7 @@ def arcgis_query_all(
             base_url + "/query",
             params={
                 "where": where,
-                "outFields": out_fields,
+                "outFields": "*",
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
                 "f": "json",
@@ -222,15 +218,14 @@ def arcgis_query_all(
         offset += len(features)
         time.sleep(0.1)
 
-    return pd.DataFrame(records) if records else None
+    return pd.DataFrame(records)
 
 
 def fetch_mbta_green_line() -> Optional[pd.DataFrame]:
     dfs = []
 
-    fall24 = arcgis_query_all(
+    fall24 = query_arcgis_data(
         "https://services1.arcgis.com/ceiitspzDAHrdGO1/arcgis/rest/services/Fall_2024_MBTA_Rail_Ridership_by_Hour_Route_Line_and_Stop/FeatureServer/0",
-        where="route_name='Green Line'",
     )
     if fall24 is not None:
         fall24["agency"] = "MBTA"
@@ -287,7 +282,7 @@ def fetch_mbta_green_line() -> Optional[pd.DataFrame]:
 def fetch_uta_light_rail() -> Optional[pd.DataFrame]:
     dfs = []
     for mode in ["Light Rail", "Streetcar"]:
-        df = arcgis_query_all(
+        df = query_arcgis_data(
             "https://maps.rideuta.com/server/rest/services/Hosted/RAIL_STOP_RIDERSHIP_TABLE_SINCE_2017/FeatureServer/0",
             where=f"mode='{mode}'",
         )
@@ -326,12 +321,13 @@ def fetch_uta_light_rail() -> Optional[pd.DataFrame]:
                 how="left",
             )
             dfs.append(average_boardings_by_day)
+    print(dfs)
     return pd.concat(dfs, ignore_index=True) if dfs else None
 
 
 def fetch_nyc_ridership_data() -> Optional[pd.DataFrame]:
     r = requests.get(
-        "https://data.ny.gov/resource/wujg-7c2s.json",
+        "",
         params={
             "$select": "station_complex_id, station_complex, latitude, longitude, transit_timestamp, ridership",
             "$where": "transit_timestamp >= '2024-10-07T00:00:00' AND transit_timestamp < '2024-10-14T00:00:00'",
@@ -370,6 +366,7 @@ def fetch_nyc_ridership_data() -> Optional[pd.DataFrame]:
         .rename(columns={"station_complex": "station"})
     )
     result["agency"] = "NYC Subway"
+    print(result)
     return result[
         ["station", "avg_boardings_per_day", "latitude", "longitude", "agency"]
     ]
@@ -421,11 +418,12 @@ def fetch_chicago_ridership_data() -> Optional[pd.DataFrame]:
     df = df.dropna(subset=["latitude", "longitude"])
 
     df["agency"] = "Chicago CTA"
+    print(df)
     return df
 
 
 def fetch_wmata() -> Optional[pd.DataFrame]:
-    df = arcgis_query_all(
+    df = query_arcgis_data(
         "https://gis.mwcog.org/wa/rest/services/RTDC/MetroRailData/MapServer/0"
     )
 
@@ -443,6 +441,7 @@ def fetch_wmata() -> Optional[pd.DataFrame]:
         "May_2019",
         "Jun_2019",
     ]
+    print(df)
 
     for col in month_cols:
         df[col] = pd.to_numeric(df["MetrorailRidershipFY19." + col], errors="coerce")
